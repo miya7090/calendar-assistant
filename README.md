@@ -1,3 +1,3 @@
 # calendar-assistant
 
-nothing here yet
+personal project. in progress.
