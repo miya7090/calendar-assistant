@@ -1,9 +1,10 @@
 from __future__ import print_function # for calendar, must be at beginning of file
+
 print("\nLoading assistant...")
-###########################
-import time
+#################################
+import datetime as DT
 import random
-random.seed(time.time())
+random.seed(DT.time.microsecond)
 # Google Calendar components
 import httplib2
 import os
@@ -11,7 +12,6 @@ from apiclient import discovery
 from oauth2client import client
 from oauth2client import tools
 from oauth2client.file import Storage
-import datetime
 try:
 	import argparse
 	flags = argparse.ArgumentParser(parents=[tools.argparser]).parse_args()
@@ -25,15 +25,15 @@ APPLICATION_NAME = 'assistant'
 
 # Variables
 myName = "user"
-mood = "happy"
-NXTHOURS = 3 # in calendar, definition of an impending event in 2 hours
-
-###########################
+NXTHOURS = DT.timedelta(hours=3) # in calendar, definition of an impending event in 3 hours
+timeZone = DT.timedelta(hours=5) # shouldn't use this if possible
+startUpTime = DT.datetime.now() # used for refreshing
+#################################
 print("assistant has been loaded.\n")
 
-
 def timeOfDay():
-	aroundTime = time.localtime().tm_hour + random.randint(-1,1)
+	print(DT.time().hour,"P")
+	aroundTime = DT.datetime.now().hour + random.randint(-1,1)
 	if(aroundTime <= 10):
 		return "morning"
 	elif(aroundTime <= 16):
@@ -44,10 +44,8 @@ def timeOfDay():
 # for Google calendar
 def get_credentials():
 	"""Gets valid user credentials from storage.
-
 	If nothing has been stored, or if the stored credentials are invalid,
 	the OAuth2 flow is completed to obtain the new credentials.
-
 	Returns:
 		Credentials, the obtained credential.
 	"""
@@ -79,106 +77,143 @@ def formatGT(eventTime): # stands for format google thingy
 	eventTime = eventTime.split('-')
 	eventTime.pop(3)
 	eventTime = '-'.join(eventTime)
-	eventTime = datetime.datetime.strptime(eventTime, "%Y-%m-%d %H:%M:%S")
-	eventTime = datetime.timedelta(hours=5)+eventTime # change to UTC
+	eventTime = DT.datetime.strptime(eventTime, "%Y-%m-%d %H:%M:%S")
 	return eventTime
 
-def imminEvent(nowEvent, maxNow = datetime.datetime.utcnow(), maxEvents = 1, maxLater = datetime.timedelta(hours=NXTHOURS)+datetime.datetime.utcnow()): # the imminent event
-	now = datetime.datetime.utcnow()
-	later = datetime.timedelta(hours=NXTHOURS)+datetime.datetime.utcnow()
-	# Getting the next 1 event
-	# 'Z' indicates UTC time
-	eventsResult = service.events().list(
-		calendarId='primary', timeMin=maxNow.isoformat()+'Z', timeMax=maxLater.isoformat()+'Z', maxResults=maxEvents, singleEvents=True,
-		orderBy='startTime').execute()
-	events = eventsResult.get('items', [])
-	if not events:
-		if nowEvent == 0: # not doing anything now either
-			print("You've got nothing planned for the next few hours." % NXTHOURS)
+def formatMinHr(numMinutes, fuzzy=0):
+	if numMinutes == 1:
+		return "1 minute"
+	elif numMinutes < 60:
+		if fuzzy == 1:
+			numMinutes = 10*round(numMinutes/10)
+			return "about "+str(numMinutes)+" minutes"
 		else:
-			print("After this, you've got some free time.")
-		return 0
-	i = 0
-	for event in events:
-		i = i + 1
-		eventTime = event['start']["dateTime"]
-		eventTime = formatGT(eventTime)
-		# print(maxNow.isoformat())
-		timeTill = round(((eventTime-now).seconds)/60)
-		if i == 1:
-			print("You've got", event['summary'], "in", timeTill, "minutes.")
-		elif i == 2:
-			print("You've also scheduled for:\n"+event['summary'])
+			return str(numMinutes)+" minutes"
+	else:
+		hrs = int(numMinutes/60) # floors it
+		mins = numMinutes%60
+		if hrs == 1:
+			hrs = "1 hour"
 		else:
-			print(event['summary'])
-	return events[0]["id"]
+			hrs = str(hrs)+" hours"
+		if mins == 0:
+			return hrs # 0 minutes
+		elif mins == 1:
+			if fuzzy == 1:
+				return "about "+hrs # 0 minutes
+			else:
+				mins = "1 minute"
+		else:
+			if fuzzy == 1:
+				mins = 10*round(mins/10)
+				return "about "+hrs+", "+str(mins)+" minutes"
+			mins = str(mins)+" minutes"
+		return hrs+", "+mins
 	
-def nextEvent(nowEvent, maxNow = datetime.datetime.utcnow(), notify = "on"):
-	now = datetime.datetime.utcnow()
+def eventLen(myEvent):
+	timeT = formatGT(myEvent["end"]["dateTime"])-formatGT(myEvent["start"]["dateTime"])
+	return round(timeT.seconds/60)
+	
+def nextEvent(nowEvent = 0):
+	# returns the next event to occur after the nowEvent, or if no next event, then 0; also returns time till
+	if nowEvent == 0:
+		maxNow = DT.datetime.utcnow()
+	else:
+		maxNow = formatGT(nowEvent["end"]["dateTime"])
 	# Getting the next 1 event
 	# 'Z' indicates UTC time
-	eventsResult = service.events().list(
-		calendarId='primary', timeMin=maxNow.isoformat()+'Z', maxResults=1, singleEvents=True,
-		orderBy='startTime').execute()
+	eventsResult = service.events().list(calendarId='primary', timeMin=maxNow.isoformat()+"-05:00", maxResults=1, singleEvents=True,orderBy='startTime').execute()
 	events = eventsResult.get('items', [])
 	if not events:
-		print("There doesn't seem to be another event on your calendar.")
 		return 0
-	for event in events:
-		eventTime = event['start']["dateTime"]
-		eventTime = formatGT(eventTime)
-		timeTill = round(((eventTime-now).seconds)/60)
-		if notify == "on":
-			print("The next thing you have scheduled is", event['summary'], "which is in", timeTill, "minutes.")
-	return events[0]
+	# get time till
+	timeTill = formatGT(events[0]["start"]["dateTime"])-DT.datetime.now()
+	return (events[0], round(timeTill.seconds/60))
+	
+def imminEvent(nowEvent = 0, maxEvents = 20, maxLater = DT.datetime.now() + NXTHOURS):
+	# returns all events within the next few hours, or a number representing the minutes of free time until the next event (-1 if no next)
+	if nowEvent == 0:
+		maxNow = DT.datetime.now()
+	else:
+		maxNow = formatGT(nowEvent["end"]["dateTime"])
+	# Getting the next 1 event
+	# 'Z' indicates UTC time (taken off)
+	eventsResult = service.events().list(calendarId='primary', timeMin=maxNow.isoformat()+"-05:00", timeMax=maxLater.isoformat()+"-05:00", maxResults=maxEvents, singleEvents=True,orderBy='startTime').execute()
+	events = eventsResult.get('items', [])
+	if not events:
+		# return time till next event
+			nxt, nxtTill = nextEvent(nowEvent)
+			if nxt != 0:
+				return nxtTill
+			else:
+				return -1
+	return events
 	
 def nowEvent():
-	now = datetime.datetime.utcnow()
-	before = datetime.datetime.utcnow()-datetime.timedelta(hours=NXTHOURS)
-	# Getting the next 1 event
+	# returns the current event and number of other events, or (0,0) if none
+	now = DT.datetime.now()
+	# Getting the "current" event
 	# 'Z' indicates UTC time
-	eventsResult = service.events().list(
-		calendarId='primary', timeMin=before.isoformat()+'Z', timeMax=now.isoformat()+'Z', maxResults=1, singleEvents=True,
-		orderBy='startTime').execute()
+	eventsResult = service.events().list(calendarId='primary', timeMin=(now-2*NXTHOURS).isoformat()+"-05:00", timeMax=(now+2*NXTHOURS).isoformat()+"-05:00", maxResults=10, singleEvents=True,orderBy='startTime').execute()
 	events = eventsResult.get('items', [])
+	events = list(reversed(events))
 	if not events:
-		return 0, now
+		return (0, now)
+	finalAns = []
 	for event in events:
-		print("You're currently scheduled for %s." % event['summary'])
-		evenEnd = event['end']["dateTime"]
-		evenEnd = formatGT(evenEnd)
-	return events[0]["id"], evenEnd
-	
-def isImportant(myEvent):
-	print(myEvent)
-		
-print("Good %s, %s. It's %s." % (timeOfDay(), myName, datetime.datetime.now().strftime('%A, %I:%M%p')))
+		if formatGT(event["end"]["dateTime"]) > now and formatGT(event["start"]["dateTime"]) < now: # make sure is still running
+			finalAns.append(event)
+	if len(finalAns) == 0:
+		return (0, 0)
+	return (finalAns[0], len(finalAns)-1)
+
+print("Good %s, %s. It's %s." % (timeOfDay(), myName, DT.datetime.now().strftime('%A, %I:%M%p')))
 myNowEvent, myNowEventEnd = nowEvent()
 
 user = input()
-while user != "Thanks":
+while user != "thanks":
+	if user == "refresh please":
+		myNowEvent, myNowEventEnd = nowEvent()
+		print("Got it,", myName)
 	# check for conflicts XXXX
-	if user == "When's my next event?":
-		myNextEvent = nextEvent(myNowEvent, maxNow = myNowEventEnd)
-		isImportant(myNextEvent)
-	if user == "Anything coming up?":
-		imminEvent(myNowEvent, maxNow = myNowEventEnd, maxEvents = 5)
-	if user == "Can I move my next event up?":
-		nextEvent = nextEvent(myNowEvent, maxNow = myNowEventEnd, notify = "off")
-		if nextEvent != 0:
-			# get length of next event
-			eventLength = formatGT(nextEvent["end"]["dateTime"]) - formatGT(nextEvent["start"]["dateTime"])
-			eventLength = round((eventLength.seconds)/60)
-			print("length of event %s is %d" % (nextEvent["summary"], eventLength))
-			busySpace = imminEvent(myNowEvent, maxNow = myNowEventEnd, maxEvents = 1, maxLater = formatGT(nextEvent["start"]["dateTime"])) # the imminent event
-			if busySpace != 0:
-				print("You've scheduled", busySpace["summary"], "at that time.");
-				print("Do you want me to move", nextEvent["summary"], "up anyway? Or swap the two events?");
+	if user == "when's my next event?":
+		myNextEvent, tillNextEvent = nextEvent(myNowEvent)
+		print("You've got",myNextEvent["summary"],"scheduled for",formatGT(myNextEvent["start"]["dateTime"]).strftime("%I:%M"))
+	if user == "how long until my next event?":
+		myNextEvent, tillNextEvent = nextEvent(myNowEvent)
+		print("You've got",formatMinHr(tillNextEvent,1))
+	if user == "how long is my next event?":
+		myNextEvent, tillNextEvent = nextEvent(myNowEvent)
+		print(myNextEvent["summary"],"is for",formatMinHr(eventLen(myNextEvent)))
+	if user == "anything coming up?":
+		imEvents = imminEvent(myNowEvent)
+		if isinstance(imEvents, int): # no events, just number
+			if imEvents == -1:
+				print("You have no events coming up!")
 			else:
-				print("Yeah. [cue move next event up]");
-	if user == "Add an event":
+				print("You've got",imEvents,"till your next event.")
+		else:
+			print("Yep. Next you have:")
+			for imEv in imEvents:
+				print(imEv["summary"])
+	if user == "can i move my next event up?":
+		myNextEvent, tillNextEvent = nextEvent(myNowEvent)
+		nxtEvLength = eventLen(myNextEvent)
+		if myNextEvent == 0:
+			print("You don't have any events next.")
+		else:
+			# get length of next event
+			nxtImEvs = imminEvent(myNowEvent, maxLater=formatGT(myNextEvent["start"]["dateTime"]))
+			if isinstance(nxtImEvs,int) and nxtImEvs != -1:
+				if nxtImEvs>nxtEvLength:
+					print("Sure, I can do that")
+				else:
+					print("You have",formatMinHr(nxtImEvs),"of time at X but it won't be enough")
+			else:
+				print("There's an event immediately after this so I can't do anything yet")
+	if user == "add an event":
 		pass
 	user = input()
+	user = user.lower()
 
 print("Closing assistant...")
-
