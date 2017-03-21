@@ -1,0 +1,22 @@
+List of Functions:
+
+timeOfDay():
+returns if it's currently "morning"/"afternoon"/"evening"
+
+formatGT(eventTime):
+formats the google string time into a dateTime
+
+formatMinHr(numMinutes, fuzzy=0):
+formats a number of minutes into a readable string
+
+eventLen(myEvent):
+returns the length of an event in minutes
+
+nextEvent(nowEvent = 0):
+returns the next event to occur after the nowEvent, or if no next event, then 0; also returns time till
+	
+imminEvent(nowEvent = 0, maxEvents = 20, maxLater = DT.datetime.now() + NXTHOURS):
+returns all events within the next few hours, or a number representing the hours of free time until the next event (-1 if no next)
+	
+nowEvent():
+returns the current event and the number of other events, or (0,0) if none
